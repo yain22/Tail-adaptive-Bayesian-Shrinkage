@@ -1,0 +1,106 @@
+---
+title: "Code Description for reviewers"
+author: "Se Yoon Lee, Peng Zhao, Debdeep Pati, and Bani Mallick"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+# 1. About codes $\small{\textsf{horseshoe_van_der_pas}(...)}$ and $\small{\textsf{GLT_prior}}$
+
+The objective of this html document is to describe some guidelines for users to execute R functions $\textsf{horseshoe_van_der_pas}(...)$ and $\textsf{GLT_prior}(...)$. Both R functions aim to realize samples via a Markov Chain Monte Carlo algorithm from the unknown parameter $\beta \in \mathbb{R}^p$ under a high-dimensional linear regression
+$$  \textbf{y}=\textbf{X} \beta + \sigma\epsilon, \quad \epsilon \sim \mathcal{N}_{n}(\textbf{0},\textbf{I}_n), \quad \textbf{X} \in \mathbb{R}^{n \times p},$$
+where the prior distribution for the $\beta$ is given by either the Horseshoe prior ($\textsf{horseshoe_van_der_pas}(...)$) or the GLT prior ($\textsf{GLT_prior}(...)$). The prior for the measurement error $\sigma^2$ is given by the Jeffreys prior $\sigma^2 \sim \pi(\sigma^2) \propto 1/\sigma^2$ for the both priors. 
+
+The hierarchies of the Horseshoe and GLT priors are given as:
+
+$$
+\Large
+\textbf{A hierarchy of the Horseshoe}
+$$
+The Horseshoe is given by 
+
+$$\beta_j|\lambda_j,\tau, \sigma^2 \sim \mathcal{N}_{1}(0,\lambda_j^2 \tau^2 \sigma^2), \quad (j=1,\cdots, p),$$
+
+$$\lambda_j, \tau \sim \mathcal{C}^{+}(0,1), \quad (j=1,\cdots, p),$$
+
+To draw samples from the posterior, we use the code $\textsf{horseshoe_van_der_pas}(...)$ which is extracted from the CRAN package https://cran.r-project.org/web/packages/horseshoe/horseshoe.pdf as follows:
+
+$$\textsf{horseshoe_van_der_pas}\text{(y, X, method.tau = "halfCauchy", method.sigma = "Jeffreys", burn, nmc, thin)}$$ where 
+$\text{y}=\textbf{y}$ and $\text{X}=\textbf{X}$.
+
+
+
+$$
+\Large
+\textbf{A hierarchy of the GLT prior}
+$$
+
+
+The GLT prior is given by
+
+$$\beta_j|\lambda_j, \sigma^2 \sim \mathcal{N}_{1}(0,\lambda_j^2 \sigma^2), \quad (j=1,\cdots, p),$$
+
+$$\lambda_j|\tau, \xi \sim \mathcal{GPD}(\tau, \xi), \quad (j=1,\cdots, p),$$
+
+$$\tau|\xi \sim \mathcal{IG}(p/\xi + 1,1),\quad 
+\xi \sim \log\ \mathcal{N}(\mu, \rho^2), \quad \mu \in \mathbb{R}, \quad\rho^2 >0.
+$$
+The $\rho^2$ and $\mu$ are hyper-parameters. We use $\rho^2=0.001$ as a default value for $\rho^2$, while the $\mu$ is calibrated by `Elliptical slice sampler centered by the Hill estimator'; refer to Algorithm 1 in Supplemental Material. Eventually, users do not need any expert-tuning for the hyper-parameters.
+
+To draw samples from the posterior distribution, one should use
+$$\textsf{GLT_prior}\text{(y, X, BCM_sampling = c(TRUE,FALSE), burn, nmc, thin)}$$ where $\text{y}=\textbf{y}$ and $\text{X}=\textbf{X}$. 
+
+
+# 2. Common inputs for the two codes
+
+The followings are common inputs for the two codes $\textsf{horseshoe_van_der_pas}(...)$ and $\textsf{GLT_prior}(...)$. 
+
+  $\text{y}:$ $n$-dimensional response vector ($\text{y} = \textbf{y}$)
+
+  $\text{X}:$ $n$-by-$p$ design matrix ($\text{X} = \textbf{X}$)
+
+  $\text{nmc}:$ number of mcmc samples after burning
+
+  $\text{burn}:$ number of burned samples
+
+  $\text{thin}:$ thinning number for the mcmc samples after burning
+
+# 3. More about the code $\small{\textsf{horseshoe_van_der_pas}(...)}$
+
+The code $\textsf{horseshoe_van_der_pas}(...)$ is the same as the function $\textsf{horseshoe}(...)$ in the $\textsf{R}$ package $\textbf{horseshoe}$ except that $\textsf{horseshoe_van_der_pas}(...)$ can additionally print out the posterior samples of local-scale parameters $\lambda_{j} (j=1,\cdots, p)$. Refer to the manual of the package for more details.  
+
+# 4. More about the code $\small{\textsf{GLT_prior}(...)}$
+
+The code $\textsf{GLT_prior}(...)$ allows the user to choose what technique to use to sample from the full-conditional posterior distribution for $\beta$ which is given by
+$$\pi(\beta|-) \sim \mathcal{N}_{p}(\Sigma\textbf{X}^{\top}\textbf{y},\sigma^2\Sigma), \quad \Sigma = (\textbf{X}^{\top}\textbf{X} + \Lambda^{-1})^{-1} \in \mathbb{R}^{p\times p}$$
+where $\Lambda = \text{diag}(\lambda_1^2,\cdots, \lambda_p^2)\in \mathbb{R}^{p \times p}$ (See the Step 1 of Subsection A.1 in Supplementary material).
+
+
+If $\text{BCM_sampling = TRUE}$ is selected, then the code $\textsf{GLT_prior}(...)$ uses the fast-sampling algorithm developed by Bhattacharya et al (Biometrika, 2016) to sample from the $\pi(\beta|-)$ at each iteration. Otherwise, if selecting $\text{BCM_sampling = FALSE}$, then the code
+$\textsf{GLT_prior}(...)$ uses an algorithm developed by Rue (JRSSB, 2001). 
+
+
+# 5. OUTPUT for the code $\small{\textsf{GLT_prior}}$
+
+Output of the code $\textsf{GLT_prior}$ is as follows:
+
+  $\text{beta.vec:}$ posterior realizations of coefficients $\beta = (\beta_1, \cdots, \beta_p)^{\top} \in \mathbb{R}^p$
+
+  $\text{lambda.vec:}$ posterior realizations of $p$ local-scale parameters $\lambda = (\lambda_1, \cdots, \lambda_p)^{\top} \in \mathbb{R}^p$
+
+  $\text{tau:}$ posterior realizations of global-scale parameter $\tau$
+
+  $\text{sigma.sq:}$ posterior realizations of measurement error $\sigma^2$
+
+  $\text{xi:}$ posterior realizations of shape parameter $\xi$
+
+
+ 
+
+

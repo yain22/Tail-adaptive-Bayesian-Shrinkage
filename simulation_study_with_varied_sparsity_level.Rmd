@@ -1,0 +1,1216 @@
+---
+title: 'Simulation study with varied sparsity level'
+author: "Se Yoon Lee, Peng Zhao, Debdeep Pati, and Bani Mallick"
+output:
+  html_document:
+    df_print: paged
+  pdf_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+**_NOTE:_** Objective of this code is to reproduce the Figure 7 (The Horseshoe) and Figure 8 (GLT prior) in the main paper. As shown in the main paper, reviewers will see the collapsing behavior of the Horseshoe  in a moderately sparse regime where the GLT prior still can detect signals.
+
+To recall, we consider a linear regression
+$$  \textbf{y}=\textbf{X} \beta_0 + \sigma_0\epsilon, \quad \epsilon \sim \mathcal{N}_{n}(\textbf{0},\textbf{I}_n), \quad \textbf{X} \in \mathbb{R}^{n \times p} $$
+where $n = 100$ and $p = 500$. The true data generating parameter vector $\beta_0 \in \mathbb{R}^{p}$ is composed of signal and noise parts: the first $q$ coefficients are ones and the rest of the thems are zeros. The sparsity level is then defined by the ratio $q/p$. In the simulation setting, $q/p = 0.004$, $0.01$, $0.016$, and $0.026$, are considered as the sparsity levels. See the Section 7 of the main paper for a detail.
+
+
+
+Install library packages
+```{r}
+library("ggplot2")
+library("horseshoe") # by Stephanie van der Pas
+library("MASS")
+library("gridExtra")
+library("compiler")
+```
+
+
+Bring external functions (To implement reviewers should set directory by setwd().)
+```{r echo=FALSE}
+setwd(dirname(rstudioapi::getActiveDocumentContext()$path))
+source("external_functions/horseshoe_van_der_pas.R") # this function is the same with horseshoe function in library(horseshoe)
+source("external_functions/GLT_prior.R")
+horseshoe_van_der_pas = cmpfun(horseshoe_van_der_pas)
+GLT_prior = cmpfun(GLT_prior)
+```
+
+Simulation environment (We used (nmc,burn,thin) = (10000,10000,100))
+```{r}
+nmc = 10000 # Number of mcmc samples after burning
+burn = 10000 # Number of burned samples
+thin = 100   # Thin number
+```
+
+
+
+# Figure 7 in the main paper (the Horseshoe prior)
+To implement the horseshoe prior, use $\textsf{horseshoe_van_der_pas}(y = \textbf{y}, X = \textbf{X}, \text{method.tau = "halfCauchy", method.sigma = "Jeffreys", burn = burn, nmc = nmc, thin = thin})$
+where $\textbf{y} \in \mathbb{R}^{n}$ is the response vector and $\textbf{X} \in \mathbb{R}^{n \times p}$ is the design matrix.
+
+```{r echo=FALSE}
+
+# seed number
+seed.index = 10
+
+# Number of covariates: Number of samples
+p = 500 ; n = 100
+# Interested Sparsity Levels q/p
+SL = c(0.004, 0.01, 0.016, 0.026)
+varrho = 0
+
+# Simulation 1
+{
+# Synthesize data
+{
+  ### Simulate synthetic data ###
+  varrho = varrho # varrho = 0 means uncorrelated design matrix 
+  p = p # dimension of true beta
+  q = p*SL[1] # no of non zeros
+  n = n  
+  signal.strength = 1
+  SNR = 5
+  
+  # Cook up Simulaton environment
+  # 1. true beta
+  true.beta.vec.1 = c(rep(signal.strength, q), rep(0,p - q) )
+
+  # 2. Design matrix
+  norm_vec <- function(x,y) {
+  norm_vector = sqrt(sum((x-y)^2))
+  
+  if (norm_vector == Inf){
+    norm_vector = 1e+308
+  } else {
+    norm_vector = norm_vector
+  } 
+  
+  return(norm_vector)
+  }
+  
+  if (varrho == 0){
+  Sigma = diag(p)
+  set.seed(seed.index)
+  X = matrix(rnorm(n = n*p), nrow = n, ncol = p)
+  
+  for (j in 1:p){
+    X[,j]  = X[,j] - mean(X[,j])
+    X[,j] = X[,j]/norm_vec(x = X[,j], y = rep(0,n))
+  }  
+}
+if (varrho != 0 ){
+  Sigma = varrho*matrix(rep(1,p*p),nrow = p, ncol = p) + (1 - varrho)*diag(1,p)
+  X.row = function(i) {
+    set.seed( (n+1) * i * seed.index)
+    mvrnorm(n = 1, mu = rep(0,p), Sigma = Sigma)
+  } 
+  res = lapply(1:n, X.row)
+  X = matrix(rep(0,n*p), nrow = n, ncol = p)
+  for (i in 1:n){
+    X[i,] = unlist(res[i])
+  }
+  X = as.matrix(X)
+  for (j in 1:p){
+    X[,j]  = X[,j] - mean(X[,j])
+    X[,j] = X[,j]/norm_vec(x = X[,j], y = rep(0,n))
+  }  
+}
+
+  epsilon = rnorm(n = n)
+true.sigma.sq = as.numeric(var(X%*%true.beta.vec.1)/(SNR*var(epsilon)))
+y = X%*%true.beta.vec.1 + sqrt(true.sigma.sq)*epsilon
+}
+
+set.seed(seed.index)
+res = horseshoe_van_der_pas(y = y, X = X, method.tau = "halfCauchy", method.sigma = "Jeffreys", burn = burn, nmc = nmc, thin = thin) 
+
+# burning & thinning
+thined.beta.vec.1 = res$BetaSamples
+thined.lambda.vec.1 = res$LambdaSamples
+thined.tau.1 = res$TauSamples
+
+tau.1 = mean(thined.tau.1)
+sl.1 = q/p
+
+}
+# Simulation 2
+{
+# Synthesize data 
+{
+  ### Simulate synthetic data ###
+  varrho = varrho # varrho = 0 means uncorrelated design matrix 
+  p = p # dimension of true beta
+  q = p*SL[2] # no of non zeros
+  n = n  
+  signal.strength = 1
+  SNR = 5  
+  
+  # Cook up Simulaton environment
+  true.beta.vec.2 = c(rep(signal.strength, q), rep(0,p - q) )
+
+  # 2. Design matrix
+  norm_vec <- function(x,y) {
+  norm_vector = sqrt(sum((x-y)^2))
+  
+  if (norm_vector == Inf){
+    norm_vector = 1e+308
+  } else {
+    norm_vector = norm_vector
+  } 
+  
+  return(norm_vector)
+}
+if (varrho == 0){
+  Sigma = diag(p)
+  set.seed(seed.index)
+  X = matrix(rnorm(n = n*p), nrow = n, ncol = p)
+  
+  for (j in 1:p){
+    X[,j]  = X[,j] - mean(X[,j])
+    X[,j] = X[,j]/norm_vec(x = X[,j], y = rep(0,n))
+  }  
+}
+if (varrho != 0 ){
+  Sigma = varrho*matrix(rep(1,p*p),nrow = p, ncol = p) + (1 - varrho)*diag(1,p)
+
+  X.row = function(i) {
+    set.seed( (n+1) * i * seed.index)
+    mvrnorm(n = 1, mu = rep(0,p), Sigma = Sigma)
+  } 
+  res = lapply(1:n, X.row)
+  X = matrix(rep(0,n*p), nrow = n, ncol = p)
+  for (i in 1:n){
+    X[i,] = unlist(res[i])
+  }
+  X = as.matrix(X)
+  for (j in 1:p){
+    X[,j]  = X[,j] - mean(X[,j])
+    X[,j] = X[,j]/norm_vec(x = X[,j], y = rep(0,n))
+  }  
+}
+
+epsilon = rnorm(n = n)
+true.sigma.sq = as.numeric(var(X%*%true.beta.vec.2)/(SNR*var(epsilon)))
+y = X%*%true.beta.vec.2 + sqrt(true.sigma.sq)*epsilon
+}
+  
+set.seed(seed.index)
+res = horseshoe_van_der_pas(y = y, X = X, method.tau = "halfCauchy", method.sigma = "Jeffreys",
+                            burn = burn, nmc = nmc, thin = thin) 
+
+# burning & thinning
+thined.beta.vec.2 = res$BetaSamples
+thined.lambda.vec.2 = res$LambdaSamples
+thined.tau.2 = res$TauSamples
+tau.2 = mean(thined.tau.2)
+sl.2 = q/p
+
+}
+# Simulation 3
+{
+# Synthesize data 
+{
+  ### Simulate synthetic data ###
+  varrho = varrho # varrho = 0 means uncorrelated design matrix 
+  p = p # dimension of true beta
+  q = p*SL[3] # no of non zeros
+  n = n  
+  signal.strength = 1
+  SNR = 5  
+  
+  # Cook up Simulaton environment
+  true.beta.vec.3 = c(rep(signal.strength, q), rep(0,p - q) )
+  
+  # 2. Design matrix
+  norm_vec <- function(x,y) {
+    norm_vector = sqrt(sum((x-y)^2))
+    
+    if (norm_vector == Inf){
+      norm_vector = 1e+308
+    } else {
+      norm_vector = norm_vector
+    } 
+    
+    return(norm_vector)
+  }
+  if (varrho == 0){
+    Sigma = diag(p)
+    set.seed(seed.index)
+    X = matrix(rnorm(n = n*p), nrow = n, ncol = p)
+    
+    for (j in 1:p){
+      X[,j]  = X[,j] - mean(X[,j])
+      X[,j] = X[,j]/norm_vec(x = X[,j], y = rep(0,n))
+    }  
+  }
+  if (varrho != 0 ){
+    Sigma = varrho*matrix(rep(1,p*p),nrow = p, ncol = p) + (1 - varrho)*diag(1,p)
+    
+    X.row = function(i) {
+      set.seed( (n+1) * i * seed.index)
+      mvrnorm(n = 1, mu = rep(0,p), Sigma = Sigma)
+    } 
+    res = lapply(1:n, X.row)
+    X = matrix(rep(0,n*p), nrow = n, ncol = p)
+    for (i in 1:n){
+      X[i,] = unlist(res[i])
+    }
+    X = as.matrix(X)
+    for (j in 1:p){
+      X[,j]  = X[,j] - mean(X[,j])
+      X[,j] = X[,j]/norm_vec(x = X[,j], y = rep(0,n))
+    }  
+  }
+  
+  epsilon = rnorm(n = n)
+  true.sigma.sq = as.numeric(var(X%*%true.beta.vec.3)/(SNR*var(epsilon)))
+  y = X%*%true.beta.vec.3 + sqrt(true.sigma.sq)*epsilon
+}  
+  
+  ##### Horseshoe implement #####
+  set.seed(seed.index)
+  res = horseshoe_van_der_pas(y = y, X = X, method.tau = "halfCauchy", method.sigma = "Jeffreys",
+                              burn = burn, nmc = nmc, thin = thin) 
+  
+  # burning & thinning
+  thined.beta.vec.3 = res$BetaSamples
+  thined.lambda.vec.3 = res$LambdaSamples
+  thined.tau.3 = res$TauSamples
+  
+  tau.3 = mean(thined.tau.3)
+  sl.3 = q/p  
+}
+# Simulation 4
+{
+# Synthesize data 
+{
+  ### Simulate synthetic data ###
+  varrho = varrho # varrho = 0 means uncorrelated design matrix 
+  p = p # dimension of true beta
+  q = p*SL[4] # no of non zeros
+  n = n  
+  signal.strength = 1
+  SNR = 5  
+  
+  # Cook up Simulaton environment
+  true.beta.vec.4 = c(rep(signal.strength, q), rep(0,p - q) )
+  
+  # 2. Design matrix
+  norm_vec <- function(x,y) {
+    norm_vector = sqrt(sum((x-y)^2))
+    
+    if (norm_vector == Inf){
+      norm_vector = 1e+308
+    } else {
+      norm_vector = norm_vector
+    } 
+    
+    return(norm_vector)
+  }
+  
+  if (varrho == 0){
+    Sigma = diag(p)
+    set.seed(seed.index)
+    X = matrix(rnorm(n = n*p), nrow = n, ncol = p)
+    
+    for (j in 1:p){
+      X[,j]  = X[,j] - mean(X[,j])
+      X[,j] = X[,j]/norm_vec(x = X[,j], y = rep(0,n))
+      # X[,j] will have unit length (Dunson & Pati)
+      }  
+  }
+  
+  if (varrho != 0 ){
+    Sigma = varrho*matrix(rep(1,p*p),nrow = p, ncol = p) + (1 - varrho)*diag(1,p)
+    ########################################################################
+    # 2-1. Define function to be used in lapply
+    
+    X.row = function(i) {
+      set.seed( (n+1) * i * seed.index)
+      mvrnorm(n = 1, mu = rep(0,p), Sigma = Sigma)
+    } 
+    # 3. Par-computing
+    res = lapply(1:n, X.row)
+    # 4. Use res
+    X = matrix(rep(0,n*p), nrow = n, ncol = p)
+    for (i in 1:n){
+      X[i,] = unlist(res[i])
+    }
+    X = as.matrix(X)
+    for (j in 1:p){
+      X[,j]  = X[,j] - mean(X[,j])
+      X[,j] = X[,j]/norm_vec(x = X[,j], y = rep(0,n))
+    }  
+  }
+  
+  epsilon = rnorm(n = n)
+  true.sigma.sq = as.numeric(var(X%*%true.beta.vec.4)/(SNR*var(epsilon)))
+  y = X%*%true.beta.vec.4 + sqrt(true.sigma.sq)*epsilon
+  
+}
+  ##### Horseshoe implement #####
+  set.seed(seed.index)
+  res = horseshoe_van_der_pas(y = y, X = X, method.tau = "halfCauchy", method.sigma = "Jeffreys",burn = burn, nmc = nmc, thin = thin) 
+
+  # burning & thinning
+  thined.beta.vec.4 = res$BetaSamples
+  thined.lambda.vec.4 = res$LambdaSamples
+  thined.tau.4 = res$TauSamples
+  
+  tau.4 = mean(thined.tau.4)
+  sl.4 = q/p
+  
+}
+
+# Dataframe the four simulation sets
+{
+  
+  # Credible intervals of beta
+  cred.prob = function(x) quantile(x = x, probs = c(0.05, 0.95))
+  
+  # Dataframe
+  {
+  # Dataset1
+  df.cred.beta.1 = data.frame(mean = rowMeans(thined.beta.vec.1), 
+                              true.beta.vec = true.beta.vec.1,
+                              lower.bound = apply(X = thined.beta.vec.1, MARGIN = 1, FUN = cred.prob )[1,],
+                              upper.bound = apply(X = thined.beta.vec.1, MARGIN = 1, FUN = cred.prob )[2,],
+                              signal.noise = c(rep("blue", p*SL[1]),rep("red",p - p*SL[1] ) ),
+                              line.type = c(rep("a",p*SL[1]),rep("b",p - p*SL[1])),
+                              covariates.index=c(1:p)
+                              )
+  
+  df.cred.lambda.1 = data.frame(mean = rowMeans(thined.lambda.vec.1), 
+                              lower.bound = apply(X = thined.lambda.vec.1, MARGIN = 1, FUN = cred.prob )[1,],
+                              upper.bound = apply(X = thined.lambda.vec.1, MARGIN = 1, FUN = cred.prob )[2,],
+                              signal.noise = c(rep("blue", p*SL[1]),rep("red", p - p*SL[1] ) ),
+                              line.type = c(rep("a", p*SL[1] ),rep("b", p - p*SL[1])),
+                              covariates.index=c(1:p)
+                              )
+  
+  cor.btw.lambda.tau.1 = c()
+  for (j in 1:p){
+    cor.btw.lambda.tau.1[j] = cor((thined.lambda.vec.1[j,]),thined.tau.1)     
+  }
+  
+  df.correlation.1 = data.frame(correlation = cor.btw.lambda.tau.1,
+                                signal.noise = c(rep("blue", p*SL[1]),rep("red", p - p*SL[1] ) ),
+                              line.type = c(rep("a",p*SL[1]),rep("b", p - p*SL[1] )),
+                              covariates.index=c(1:p)
+                              )
+  # Dataset2
+  
+  df.cred.beta.2 = data.frame(mean = rowMeans(thined.beta.vec.2), 
+                              true.beta.vec = true.beta.vec.2,
+                              lower.bound = apply(X = thined.beta.vec.2, MARGIN = 1, FUN = cred.prob )[1,],
+                              upper.bound = apply(X = thined.beta.vec.2, MARGIN = 1, FUN = cred.prob )[2,],
+                              signal.noise = c(rep("blue", p*SL[2]),rep("red",p - p*SL[2] ) ),
+                              line.type = c(rep("a",p*SL[2]),rep("b",p - p*SL[2])),
+                              covariates.index=c(1:p)
+  )
+  
+  df.cred.lambda.2 = data.frame(mean = rowMeans(thined.lambda.vec.2), 
+                                lower.bound = apply(X = thined.lambda.vec.2, MARGIN = 1, FUN = cred.prob )[1,],
+                                upper.bound = apply(X = thined.lambda.vec.2, MARGIN = 1, FUN = cred.prob )[2,],
+                                signal.noise = c(rep("blue", p*SL[2]),rep("red", p - p*SL[2] ) ),
+                                line.type = c(rep("a",p*SL[2]),rep("b", p - p*SL[2])),
+                                covariates.index=c(1:p)
+  )
+  
+  cor.btw.lambda.tau.2 = c()
+  for (j in 1:p){
+    cor.btw.lambda.tau.2[j] = cor((thined.lambda.vec.2[j,]),thined.tau.2)     
+  }
+  
+  df.correlation.2 = data.frame(correlation = cor.btw.lambda.tau.2,
+                                signal.noise = c(rep("blue", p*SL[2]),rep("red", p - p*SL[2] ) ),
+                                line.type = c(rep("a",p*SL[2]),rep("b", p - p*SL[2])),
+                                covariates.index=c(1:p)
+  )
+  
+  # Dataset3
+  
+  df.cred.beta.3 = data.frame(mean = rowMeans(thined.beta.vec.3), 
+                              true.beta.vec = true.beta.vec.3,
+                              lower.bound = apply(X = thined.beta.vec.3, MARGIN = 1, FUN = cred.prob )[1,],
+                              upper.bound = apply(X = thined.beta.vec.3, MARGIN = 1, FUN = cred.prob )[2,],
+                              signal.noise = c(rep("blue", p*SL[3]),rep("red",p - p*SL[3] ) ),
+                              line.type = c(rep("a",p*SL[3]),rep("b",p - p*SL[3])),
+                              covariates.index=c(1:p)
+  )
+  
+  df.cred.lambda.3 = data.frame(mean = rowMeans(thined.lambda.vec.3), 
+                                lower.bound = apply(X = thined.lambda.vec.3, MARGIN = 1, FUN = cred.prob )[1,],
+                                upper.bound = apply(X = thined.lambda.vec.3, MARGIN = 1, FUN = cred.prob )[2,],
+                                signal.noise = c(rep("blue", p*SL[3]),rep("red", p - p*SL[3] ) ),
+                                line.type = c(rep("a",p*SL[3]),rep("b", p - p*SL[3])),
+                                covariates.index=c(1:p)
+  )
+  
+  cor.btw.lambda.tau.3 = c()
+  for (j in 1:p){
+    cor.btw.lambda.tau.3[j] = cor((thined.lambda.vec.3[j,]),thined.tau.3)     
+  }
+  
+  df.correlation.3 = data.frame(correlation = cor.btw.lambda.tau.3,
+                                signal.noise = c(rep("blue", p*SL[3]),rep("red", p - p*SL[3] ) ),
+                                line.type = c(rep("a",p*SL[3]),rep("b", p - p*SL[3])),
+                                covariates.index=c(1:p)
+  )
+  
+  
+  # Dataset4
+  df.cred.beta.4 = data.frame(mean = rowMeans(thined.beta.vec.4), 
+                              true.beta.vec = true.beta.vec.4,
+                              lower.bound = apply(X = thined.beta.vec.4, MARGIN = 1, FUN = cred.prob )[1,],
+                              upper.bound = apply(X = thined.beta.vec.4, MARGIN = 1, FUN = cred.prob )[2,],
+                              signal.noise = c(rep("blue", p*SL[4]),rep("red",p - p*SL[4] ) ),
+                              line.type = c(rep("a",p*SL[4]),rep("b",p - p*SL[4])),
+                              covariates.index=c(1:p)
+  )
+  
+  df.cred.lambda.4 = data.frame(mean = rowMeans(thined.lambda.vec.4), 
+                                lower.bound = apply(X = thined.lambda.vec.4, MARGIN = 1, FUN = cred.prob )[1,],
+                                upper.bound = apply(X = thined.lambda.vec.4, MARGIN = 1, FUN = cred.prob )[2,],
+                                signal.noise = c(rep("blue", p*SL[4]),rep("red", p - p*SL[4] ) ),
+                                line.type = c(rep("a",p*SL[4]),rep("b", p - p*SL[4])),
+                                covariates.index=c(1:p)
+  )
+  
+  cor.btw.lambda.tau.4 = c()
+  for (j in 1:p){
+    cor.btw.lambda.tau.4[j] = cor((thined.lambda.vec.4[j,]),thined.tau.4)     
+  }
+  
+  df.correlation.4 = data.frame(correlation = cor.btw.lambda.tau.4,
+                                signal.noise = c(rep("blue", p*SL[4]),rep("red", p - p*SL[4] ) ),
+                                line.type = c(rep("a",p*SL[4]),rep("b", p - p*SL[4])),
+                                covariates.index=c(1:p)
+  )
+  
+  }
+}
+
+# Plotting by ggplot2
+{
+
+cred.beta.sim = function( df.cred.beta ){
+  
+  res = ggplot(df.cred.beta, aes(factor(covariates.index),
+                                     y = mean,
+                                     ymin = lower.bound,
+                                     ymax = upper.bound,
+                                     color = signal.noise,
+                                     linetype = line.type))+
+    geom_pointrange(size = 0.2) +
+    xlab("covariate index j") +
+    ylab(expression(paste("credible interval of ", beta[j]))) +
+    theme_bw() + 
+    theme(text = element_text(size=10),
+          axis.text.x = element_blank(),
+          axis.ticks = element_blank())+
+    ylim(-0.5, max(df.cred.beta$true.beta.vec) + 0.5)+
+    geom_point(aes(y=df.cred.beta$true.beta.vec), color="green", size = 1)+
+    geom_point() +
+    theme(legend.position="none")+
+    scale_color_manual(values=c("blue", "red"))
+  
+  return(res)
+}
+cred.lambda.sim = function( df.cred.lambda ){
+  
+  res = ggplot(df.cred.lambda, aes(factor(covariates.index),
+                                         y = mean, 
+                                         ymin = lower.bound,
+                                         ymax = upper.bound,
+                                         color = signal.noise,
+                                         linetype = line.type))+
+    theme_bw() + 
+    geom_pointrange(size = 0.2) + 
+    xlab("covariate index j") +
+    ylab(expression(paste("credible interval of ", lambda[j]))) +
+    theme(text = element_text(size=10),
+          axis.text.x = element_blank(),
+          axis.ticks = element_blank())+
+    theme(legend.position="none")+
+    scale_color_manual(values=c("blue", "red"))  
+  
+  return(res)
+  
+}
+cor.sim = function( df.correlation ){
+
+  res = ggplot(df.correlation, aes(factor(covariates.index),
+                                      y = correlation, 
+                                      color = signal.noise
+  ))+
+    geom_point(size = 1) +
+    geom_hline(yintercept=0, linetype = "dashed", color = "red")+
+    xlab("covariate index j") +
+    ylab(expression(paste("cor(", lambda[j], ",", tau,"|y)" ))) +
+    theme_bw() + 
+    theme(text = element_text(size=10),
+          axis.text.x = element_blank(),
+          axis.ticks = element_blank())+
+    ylim(-1, 1)+
+    theme(legend.position="none")+
+    scale_color_manual(values=c("blue", "red"))  
+  
+  return(res)
+  
+}
+
+# Finally, ploting in one page 
+used.p = 25
+grid.arrange(cred.beta.sim(df.cred.beta = df.cred.beta.1[1:used.p,]), 
+             cred.beta.sim(df.cred.beta = df.cred.beta.2[1:used.p,]),
+             cred.beta.sim(df.cred.beta = df.cred.beta.3[1:used.p,]),
+             cred.beta.sim(df.cred.beta = df.cred.beta.4[1:used.p,]),
+             
+             cred.lambda.sim(df.cred.lambda = df.cred.lambda.1[1:used.p,]),
+             cred.lambda.sim(df.cred.lambda = df.cred.lambda.2[1:used.p,]),
+             cred.lambda.sim(df.cred.lambda = df.cred.lambda.3[1:used.p,]),
+             cred.lambda.sim(df.cred.lambda = df.cred.lambda.4[1:used.p,]),
+            
+             cor.sim(df.correlation = df.correlation.1[1:used.p,]),
+             cor.sim(df.correlation = df.correlation.2[1:used.p,]),
+             cor.sim(df.correlation = df.correlation.3[1:used.p,]),
+             cor.sim(df.correlation = df.correlation.4[1:used.p,]),
+             nrow = 3, ncol = 4 )
+}
+```
+
+
+The posterior means of global-scale parameter $\tau$ (sparsity levels increase from the left to the right.)
+```{r echo=FALSE}
+print(c(tau.1,tau.2,tau.3,tau.4))
+```
+
+
+
+# Figure 8 in the main paper (GLT prior)
+To implement the GLT prior, use 
+$\textsf{GLT_prior}(y = \textbf{y}, X = \textbf{X}, \text{BCM_sampling =  TRUE, burn = burn, nmc = nmc, thin = thin})$
+where $\textbf{y} \in \mathbb{R}^{n}$ is the response vector and $\textbf{X} \in \mathbb{R}^{n \times p}$ is the design matrix. 
+```{r echo=FALSE}
+# seed number
+seed.index = 10
+
+# Number of covariates: Number of samples
+p = 500 ; n = 100
+# Interested Sparsity Levels 
+SL = c(0.004, 0.01, 0.016, 0.026)
+varrho = 0
+
+# Simulation 1
+{
+  # Synthesize data
+  {
+    ### Simulate synthetic data ###
+    varrho = varrho # varrho = 0 means uncorrelated design matrix 
+    p = p # dimension of true beta
+    q = p*SL[1] # no of non zeros
+    n = n  
+    signal.strength = 1
+    SNR = 5  
+    
+    # Cook up Simulaton environment
+    # 1. true beta
+    true.beta.vec.1 = c(rep(signal.strength, q), rep(0, p - q) )
+    
+    # 2. Design matrix
+    norm_vec <- function(x,y) {
+      norm_vector = sqrt(sum((x-y)^2))
+      
+      if (norm_vector == Inf){
+        norm_vector = 1e+308
+      } else {
+        norm_vector = norm_vector
+      } 
+      
+      return(norm_vector)
+    }
+    if (varrho == 0){
+      Sigma = diag(p)
+      set.seed(seed.index)
+      X = matrix(rnorm(n = n*p), nrow = n, ncol = p)
+      
+      for (j in 1:p){
+        X[,j]  = X[,j] - mean(X[,j])
+        X[,j] = X[,j]/norm_vec(x = X[,j], y = rep(0,n))
+      }  
+    }
+    if (varrho != 0 ){
+      Sigma = varrho*matrix(rep(1,p*p),nrow = p, ncol = p) + (1 - varrho)*diag(1,p)
+    
+      X.row = function(i) {
+        set.seed( (n+1) * i * seed.index)
+        mvrnorm(n = 1, mu = rep(0,p), Sigma = Sigma)
+      } 
+      res = lapply(1:n, X.row)
+      X = matrix(rep(0,n*p), nrow = n, ncol = p)
+      for (i in 1:n){
+        X[i,] = unlist(res[i])
+      }
+      X = as.matrix(X)
+      for (j in 1:p){
+        X[,j]  = X[,j] - mean(X[,j])
+        X[,j] = X[,j]/norm_vec(x = X[,j], y = rep(0,n))
+      }  
+    }
+  
+    epsilon = rnorm(n = n)
+    true.sigma.sq = as.numeric(var(X%*%true.beta.vec.1)/(SNR*var(epsilon)))
+    y = X%*%true.beta.vec.1 + sqrt(true.sigma.sq)*epsilon
+    
+  }
+  
+  set.seed(seed.index)
+  res = GLT_prior(y = y, X = X, BCM_sampling =  TRUE, burn = burn, nmc = nmc, thin = thin) 
+  
+  # burning & thinning
+  thined.beta.vec.1 = res$beta.vec
+  thined.lambda.vec.1 = res$lambda.vec
+  thined.tau.1 = res$tau
+  thined.xi.1 = res$ xi
+  
+  tau.1 = mean(thined.tau.1)
+  xi.1 = mean(thined.xi.1)
+  sl.1 = q/p
+  
+}
+
+# Simulation 2
+{
+  # Synthesize data 
+  {
+    ### Simulate synthetic data ###
+    varrho = varrho # varrho = 0 means uncorrelated design matrix 
+    p = p # dimension of true beta
+    q = p*SL[2] # no of non zeros
+    n = n  
+    signal.strength = 1
+    SNR = 5  
+    
+    # Cook up Simulaton environment
+    true.beta.vec.2 = c(rep(signal.strength, q), rep(0,p - q) ) # Option 1  
+    
+    # 2. Design matrix
+    norm_vec <- function(x,y) {
+      norm_vector = sqrt(sum((x-y)^2))
+      
+      if (norm_vector == Inf){
+        norm_vector = 1e+308
+      } else {
+        norm_vector = norm_vector
+      } 
+      
+      return(norm_vector)
+    }
+    if (varrho == 0){
+      Sigma = diag(p)
+      set.seed(seed.index)
+      X = matrix(rnorm(n = n*p), nrow = n, ncol = p)
+      
+      for (j in 1:p){
+        X[,j]  = X[,j] - mean(X[,j])
+        X[,j] = X[,j]/norm_vec(x = X[,j], y = rep(0,n))
+      }  
+    }
+    if (varrho != 0 ){
+      Sigma = varrho*matrix(rep(1,p*p),nrow = p, ncol = p) + (1 - varrho)*diag(1,p)
+      X.row = function(i) {
+        set.seed( (n+1) * i * seed.index)
+        mvrnorm(n = 1, mu = rep(0,p), Sigma = Sigma)
+      } 
+      res = lapply(1:n, X.row)
+      X = matrix(rep(0,n*p), nrow = n, ncol = p)
+      for (i in 1:n){
+        X[i,] = unlist(res[i])
+      }
+      X = as.matrix(X)
+      for (j in 1:p){
+        X[,j]  = X[,j] - mean(X[,j])
+        X[,j] = X[,j]/norm_vec(x = X[,j], y = rep(0,n))
+      }  
+    }
+    
+    epsilon = rnorm(n = n)
+    true.sigma.sq = as.numeric(var(X%*%true.beta.vec.2)/(SNR*var(epsilon)))
+    y = X%*%true.beta.vec.2 + sqrt(true.sigma.sq)*epsilon
+  }
+  
+  set.seed(seed.index)
+  res = GLT_prior(y = y, X = X, BCM_sampling =  TRUE,burn = burn, nmc = nmc, thin = thin) 
+  
+  # burning & thinning
+  thined.beta.vec.2 = res$beta.vec
+  thined.lambda.vec.2 = res$lambda.vec
+  thined.tau.2 = res$tau
+  thined.xi.2 = res$ xi
+  
+  tau.2 = mean(thined.tau.2)
+  xi.2 = mean(thined.xi.2)
+  sl.2 = q/p
+  
+}
+
+# Simulation 3
+{
+  # Synthesize data 
+  {
+    ### Simulate synthetic data ###
+    varrho = varrho # varrho = 0 means uncorrelated design matrix 
+    p = p # dimension of true beta
+    q = p*SL[3] # no of non zeros
+    n = n  
+    signal.strength = 1
+    SNR = 5  
+    
+    # Cook up Simulaton environment
+    true.beta.vec.3 = c(rep(signal.strength, q), rep(0,p - q) )
+    
+    # 2. Design matrix
+    norm_vec <- function(x,y) {
+      norm_vector = sqrt(sum((x-y)^2))
+      
+      if (norm_vector == Inf){
+        norm_vector = 1e+308
+      } else {
+        norm_vector = norm_vector
+      } 
+      
+      return(norm_vector)
+    }
+    if (varrho == 0){
+      Sigma = diag(p)
+      set.seed(seed.index)
+      X = matrix(rnorm(n = n*p), nrow = n, ncol = p)
+      
+      for (j in 1:p){
+        X[,j]  = X[,j] - mean(X[,j])
+        X[,j] = X[,j]/norm_vec(x = X[,j], y = rep(0,n))
+      }  
+    }
+    if (varrho != 0 ){
+      Sigma = varrho*matrix(rep(1,p*p),nrow = p, ncol = p) + (1 - varrho)*diag(1,p)
+  
+      X.row = function(i) {
+        set.seed( (n+1) * i * seed.index)
+        mvrnorm(n = 1, mu = rep(0,p), Sigma = Sigma)
+      } 
+      res = lapply(1:n, X.row)
+      X = matrix(rep(0,n*p), nrow = n, ncol = p)
+      for (i in 1:n){
+        X[i,] = unlist(res[i])
+      }
+      X = as.matrix(X)
+      for (j in 1:p){
+        X[,j]  = X[,j] - mean(X[,j])
+        X[,j] = X[,j]/norm_vec(x = X[,j], y = rep(0,n))
+      }  
+    }
+    
+    epsilon = rnorm(n = n)
+    true.sigma.sq = as.numeric(var(X%*%true.beta.vec.3)/(SNR*var(epsilon)))
+    y = X%*%true.beta.vec.3 + sqrt(true.sigma.sq)*epsilon
+  }  
+  
+  set.seed(seed.index)
+  res = GLT_prior(y = y, X = X, BCM_sampling =  TRUE,burn = burn, nmc = nmc, thin = thin) 
+  
+  # burning & thinning
+  thined.beta.vec.3 = res$beta.vec
+  thined.lambda.vec.3 = res$lambda.vec
+  thined.tau.3 = res$tau
+  thined.xi.3 = res$ xi
+  
+  tau.3 = mean(thined.tau.3)
+  xi.3 = mean(thined.xi.3)
+  sl.3 = q/p
+  
+}
+
+# Simulation 4
+{
+  # Synthesize data 
+  {
+    ### Simulate synthetic data ###
+    varrho = varrho # varrho = 0 means uncorrelated design matrix 
+    p = p # dimension of true beta
+    q = p*SL[4] # no of non zeros
+    n = n  
+    signal.strength = 1
+    SNR = 5  
+    
+    # Cook up Simulaton environment
+    true.beta.vec.4 = c(rep(signal.strength, q), rep(0,p - q) )
+    
+    # 2. Design matrix
+    norm_vec <- function(x,y) {
+      norm_vector = sqrt(sum((x-y)^2))
+      
+      if (norm_vector == Inf){
+        norm_vector = 1e+308
+      } else {
+        norm_vector = norm_vector
+      } 
+      
+      return(norm_vector)
+    }
+    
+    if (varrho == 0){
+      Sigma = diag(p)
+      set.seed(seed.index)
+      X = matrix(rnorm(n = n*p), nrow = n, ncol = p)
+      
+      for (j in 1:p){
+        X[,j]  = X[,j] - mean(X[,j])
+        X[,j] = X[,j]/norm_vec(x = X[,j], y = rep(0,n))
+    
+      }  
+    }
+    
+    if (varrho != 0 ){
+      Sigma = varrho*matrix(rep(1,p*p),nrow = p, ncol = p) + (1 - varrho)*diag(1,p)
+  
+        X.row = function(i) {
+        set.seed( (n+1) * i * seed.index)
+        mvrnorm(n = 1, mu = rep(0,p), Sigma = Sigma)
+      } 
+      res = lapply(1:n, X.row)
+      X = matrix(rep(0,n*p), nrow = n, ncol = p)
+      for (i in 1:n){
+        X[i,] = unlist(res[i])
+      }
+      X = as.matrix(X)
+      for (j in 1:p){
+        X[,j]  = X[,j] - mean(X[,j])
+        X[,j] = X[,j]/norm_vec(x = X[,j], y = rep(0,n))
+      }  
+    }
+    
+    epsilon = rnorm(n = n)
+    true.sigma.sq = as.numeric(var(X%*%true.beta.vec.4)/(SNR*var(epsilon)))
+    y = X%*%true.beta.vec.4 + sqrt(true.sigma.sq)*epsilon
+    
+  }
+  
+  set.seed(seed.index)
+  res = GLT_prior(y = y, X = X, BCM_sampling =  TRUE,burn = burn, nmc = nmc, thin = thin) 
+  
+  # burning & thinning
+  thined.beta.vec.4 = res$beta.vec
+  thined.lambda.vec.4 = res$lambda.vec
+  thined.tau.4 = res$tau
+  thined.xi.4 = res$ xi
+  
+  tau.4 = mean(thined.tau.4)
+  xi.4 = mean(thined.xi.4)
+  sl.4 = q/p
+  
+}
+
+# Dataframe the four simulation sets
+{
+  
+  # Credible intervals of beta
+  cred.prob = function(x) quantile(x = x, probs = c(0.05, 0.95))
+  
+  # Dataframe
+  {
+    # Dataset1
+    df.cred.beta.1 = data.frame(mean = rowMeans(thined.beta.vec.1), 
+                                true.beta.vec = true.beta.vec.1,
+                                lower.bound = apply(X = thined.beta.vec.1, MARGIN = 1, FUN = cred.prob )[1,],
+                                upper.bound = apply(X = thined.beta.vec.1, MARGIN = 1, FUN = cred.prob )[2,],
+                                signal.noise = c(rep("blue", p*SL[1]),rep("red",p - p*SL[1] ) ),
+                                line.type = c(rep("a",p*SL[1]),rep("b",p - p*SL[1])),
+                                covariates.index=c(1:p)
+    )
+    
+    df.cred.lambda.1 = data.frame(mean = rowMeans(thined.lambda.vec.1), 
+                                  lower.bound = apply(X = thined.lambda.vec.1, MARGIN = 1, FUN = cred.prob )[1,],
+                                  upper.bound = apply(X = thined.lambda.vec.1, MARGIN = 1, FUN = cred.prob )[2,],
+                                  signal.noise = c(rep("blue", p*SL[1]),rep("red", p - p*SL[1] ) ),
+                                  line.type = c(rep("a", p*SL[1] ),rep("b", p - p*SL[1])),
+                                  covariates.index=c(1:p)
+    )
+    
+    cor.btw.lambda.tau.1 = c()
+    cor.btw.lambda.xi.1 = c()
+    for (j in 1:p){
+      cor.btw.lambda.tau.1[j] = cor((thined.lambda.vec.1[j,]),thined.tau.1)
+      cor.btw.lambda.xi.1[j] = cor((thined.lambda.vec.1[j,]),thined.xi.1)
+    }
+    
+    df.correlation.lambda.tau.1 = data.frame(correlation = cor.btw.lambda.tau.1,
+                                  signal.noise = c(rep("blue", p*SL[1]),rep("red", p - p*SL[1] ) ),
+                                  line.type = c(rep("a",p*SL[1]),rep("b", p - p*SL[1] )),
+                                  covariates.index=c(1:p)
+                                  )
+    
+    df.correlation.lambda.xi.1 = data.frame(correlation = cor.btw.lambda.xi.1,
+                                  signal.noise = c(rep("blue", p*SL[1]),rep("red", p - p*SL[1] ) ),
+                                  line.type = c(rep("a",p*SL[1]),rep("b", p - p*SL[1] )),
+                                  covariates.index=c(1:p)
+                                  )
+    
+    # Dataset2
+    
+    df.cred.beta.2 = data.frame(mean = rowMeans(thined.beta.vec.2), 
+                                true.beta.vec = true.beta.vec.2,
+                                lower.bound = apply(X = thined.beta.vec.2, MARGIN = 1, FUN = cred.prob )[1,],
+                                upper.bound = apply(X = thined.beta.vec.2, MARGIN = 1, FUN = cred.prob )[2,],
+                                signal.noise = c(rep("blue", p*SL[2]),rep("red",p - p*SL[2] ) ),
+                                line.type = c(rep("a",p*SL[2]),rep("b",p - p*SL[2])),
+                                covariates.index=c(1:p)
+    )
+    
+    df.cred.lambda.2 = data.frame(mean = rowMeans(thined.lambda.vec.2), 
+                                  lower.bound = apply(X = thined.lambda.vec.2, MARGIN = 1, FUN = cred.prob )[1,],
+                                  upper.bound = apply(X = thined.lambda.vec.2, MARGIN = 1, FUN = cred.prob )[2,],
+                                  signal.noise = c(rep("blue", p*SL[2]),rep("red", p - p*SL[2] ) ),
+                                  line.type = c(rep("a",p*SL[2]),rep("b", p - p*SL[2])),
+                                  covariates.index=c(1:p)
+    )
+    
+    cor.btw.lambda.tau.2 = c()
+    cor.btw.lambda.xi.2 = c()
+    for (j in 1:p){
+      cor.btw.lambda.tau.2[j] = cor((thined.lambda.vec.2[j,]),thined.tau.2)
+      cor.btw.lambda.xi.2[j] = cor((thined.lambda.vec.2[j,]),thined.xi.2)
+    }
+    
+    df.correlation.lambda.tau.2 = data.frame(correlation = cor.btw.lambda.tau.2,
+                                             signal.noise = c(rep("blue", p*SL[2]),rep("red", p - p*SL[2] ) ),
+                                             line.type = c(rep("a",p*SL[2]),rep("b", p - p*SL[2] )),
+                                             covariates.index=c(1:p)
+    )
+    
+    df.correlation.lambda.xi.2 = data.frame(correlation = cor.btw.lambda.xi.2,
+                                            signal.noise = c(rep("blue", p*SL[2]),rep("red", p - p*SL[2] ) ),
+                                            line.type = c(rep("a",p*SL[2]),rep("b", p - p*SL[2] )),
+                                            covariates.index=c(1:p)
+    )
+    
+    
+    # Dataset3
+    
+    df.cred.beta.3 = data.frame(mean = rowMeans(thined.beta.vec.3), 
+                                true.beta.vec = true.beta.vec.3,
+                                lower.bound = apply(X = thined.beta.vec.3, MARGIN = 1, FUN = cred.prob )[1,],
+                                upper.bound = apply(X = thined.beta.vec.3, MARGIN = 1, FUN = cred.prob )[2,],
+                                signal.noise = c(rep("blue", p*SL[3]),rep("red",p - p*SL[3] ) ),
+                                line.type = c(rep("a",p*SL[3]),rep("b",p - p*SL[3])),
+                                covariates.index=c(1:p)
+    )
+    
+    df.cred.lambda.3 = data.frame(mean = rowMeans(thined.lambda.vec.3), 
+                                  lower.bound = apply(X = thined.lambda.vec.3, MARGIN = 1, FUN = cred.prob )[1,],
+                                  upper.bound = apply(X = thined.lambda.vec.3, MARGIN = 1, FUN = cred.prob )[2,],
+                                  signal.noise = c(rep("blue", p*SL[3]),rep("red", p - p*SL[3] ) ),
+                                  line.type = c(rep("a",p*SL[3]),rep("b", p - p*SL[3])),
+                                  covariates.index=c(1:p)
+    )
+    
+    cor.btw.lambda.tau.3 = c()
+    cor.btw.lambda.xi.3 = c()
+    for (j in 1:p){
+      cor.btw.lambda.tau.3[j] = cor((thined.lambda.vec.3[j,]),thined.tau.3)
+      cor.btw.lambda.xi.3[j] = cor((thined.lambda.vec.3[j,]),thined.xi.3)
+    }
+    
+    df.correlation.lambda.tau.3 = data.frame(correlation = cor.btw.lambda.tau.3,
+                                             signal.noise = c(rep("blue", p*SL[3]),rep("red", p - p*SL[3] ) ),
+                                             line.type = c(rep("a",p*SL[3]),rep("b", p - p*SL[3] )),
+                                             covariates.index=c(1:p)
+    )
+    
+    df.correlation.lambda.xi.3 = data.frame(correlation = cor.btw.lambda.xi.3,
+                                            signal.noise = c(rep("blue", p*SL[3]),rep("red", p - p*SL[3] ) ),
+                                            line.type = c(rep("a",p*SL[3]),rep("b", p - p*SL[3] )),
+                                            covariates.index=c(1:p)
+    )
+    
+    # Dataset4
+    df.cred.beta.4 = data.frame(mean = rowMeans(thined.beta.vec.4), 
+                                true.beta.vec = true.beta.vec.4,
+                                lower.bound = apply(X = thined.beta.vec.4, MARGIN = 1, FUN = cred.prob )[1,],
+                                upper.bound = apply(X = thined.beta.vec.4, MARGIN = 1, FUN = cred.prob )[2,],
+                                signal.noise = c(rep("blue", p*SL[4]),rep("red",p - p*SL[4] ) ),
+                                line.type = c(rep("a",p*SL[4]),rep("b",p - p*SL[4])),
+                                covariates.index=c(1:p)
+    )
+    
+    df.cred.lambda.4 = data.frame(mean = rowMeans(thined.lambda.vec.4), 
+                                  lower.bound = apply(X = thined.lambda.vec.4, MARGIN = 1, FUN = cred.prob )[1,],
+                                  upper.bound = apply(X = thined.lambda.vec.4, MARGIN = 1, FUN = cred.prob )[2,],
+                                  signal.noise = c(rep("blue", p*SL[4]),rep("red", p - p*SL[4] ) ),
+                                  line.type = c(rep("a",p*SL[4]),rep("b", p - p*SL[4])),
+                                  covariates.index=c(1:p)
+    )
+    
+    cor.btw.lambda.tau.4 = c()
+    cor.btw.lambda.xi.4 = c()
+    for (j in 1:p){
+      cor.btw.lambda.tau.4[j] = cor((thined.lambda.vec.4[j,]),thined.tau.4)
+      cor.btw.lambda.xi.4[j] = cor((thined.lambda.vec.4[j,]),thined.xi.4)
+    }
+    
+    df.correlation.lambda.tau.4 = data.frame(correlation = cor.btw.lambda.tau.4,
+                                             signal.noise = c(rep("blue", p*SL[4]),rep("red", p - p*SL[4] ) ),
+                                             line.type = c(rep("a",p*SL[4]),rep("b", p - p*SL[4] )),
+                                             covariates.index=c(1:p)
+    )
+    
+    df.correlation.lambda.xi.4 = data.frame(correlation = cor.btw.lambda.xi.4,
+                                            signal.noise = c(rep("blue", p*SL[4]),rep("red", p - p*SL[4] ) ),
+                                            line.type = c(rep("a",p*SL[4]),rep("b", p - p*SL[4] )),
+                                            covariates.index=c(1:p)
+    )
+    
+    
+  }
+  
+}
+
+# Plotting by ggplot2
+{
+  
+  cred.beta.sim = function( df.cred.beta ){
+    
+    res = ggplot(df.cred.beta, aes(factor(covariates.index),
+                                   y = mean,
+                                   ymin = lower.bound,
+                                   ymax = upper.bound,
+                                   color = signal.noise,
+                                   linetype = line.type))+
+      geom_pointrange(size = 0.2) +
+      xlab("covariate index j") +
+      ylab(expression(paste("credible interval of ", beta[j]))) +
+      theme_bw() + 
+      theme(text = element_text(size=10),
+            axis.text.x = element_blank(),
+            axis.ticks = element_blank())+
+      ylim(-0.5, max(df.cred.beta$true.beta.vec) + 0.5)+
+      geom_point(aes(y=df.cred.beta$true.beta.vec), color="green", size = 1)+
+      geom_point() +
+      theme(legend.position="none")+
+      scale_color_manual(values=c("blue", "red"))
+    
+    return(res)
+  }
+  cred.lambda.sim = function( df.cred.lambda ){
+    
+    res = ggplot(df.cred.lambda, aes(factor(covariates.index),
+                                     y = mean, 
+                                     ymin = lower.bound,
+                                     ymax = upper.bound,
+                                     color = signal.noise,
+                                     linetype = line.type))+
+      geom_pointrange(size = 0.2) +
+      xlab("covariate index j") +
+      ylab(expression(paste("credible interval of ", lambda[j]))) +
+      theme_bw() + 
+      theme(text = element_text(size=10),
+            axis.text.x = element_blank(),
+            axis.ticks = element_blank())+
+      theme(legend.position="none")+
+      scale_color_manual(values=c("blue", "red"))  
+    
+    return(res)
+    
+  }
+  cor.sim.lambda.tau = function( df.correlation ){
+    
+    res = ggplot(df.correlation, aes(factor(covariates.index),
+                                     y = correlation, 
+                                     color = signal.noise
+    ))+
+      geom_point(size = 1) +
+      geom_hline(yintercept=0, linetype = "dashed", color = "red")+
+      xlab("covariate index j") +
+      ylab(expression(paste("cor(", lambda[j], ",", tau,"|y)" ))) +
+      theme_bw() + 
+      theme(text = element_text(size=10),
+            axis.text.x = element_blank(),
+            axis.ticks = element_blank())+
+      ylim(-1, 1)+
+      theme(legend.position="none")+
+      scale_color_manual(values=c("blue", "red"))  
+    
+    return(res)
+    
+  }
+  cor.sim.lambda.xi = function( df.correlation ){
+    
+    res = ggplot(df.correlation, aes(factor(covariates.index),
+                                     y = correlation, 
+                                     color = signal.noise
+    ))+
+      geom_point(size = 1) +
+      geom_hline(yintercept=0, linetype = "dashed", color = "red")+
+      xlab("covariate index j") +
+      ylab(expression(paste("cor(", lambda[j], ",", xi,"|y)" ))) +
+      theme_bw() + 
+      theme(text = element_text(size=10),
+            axis.text.x = element_blank(),
+            axis.ticks = element_blank())+
+      ylim(-1, 1)+
+      theme(legend.position="none")+
+      scale_color_manual(values=c("blue", "red"))  
+    
+    return(res)
+    
+  }
+  
+  # Finally, ploting in one page 
+  # Size is 16 theme(text = element_text(size=16)
+  
+  used.p = 25
+  grid.arrange(cred.beta.sim(df.cred.beta = df.cred.beta.1[1:used.p,]), 
+               cred.beta.sim(df.cred.beta = df.cred.beta.2[1:used.p,]),
+               cred.beta.sim(df.cred.beta = df.cred.beta.3[1:used.p,]),
+               cred.beta.sim(df.cred.beta = df.cred.beta.4[1:used.p,]),
+               
+               cred.lambda.sim(df.cred.lambda = df.cred.lambda.1[1:used.p,]),
+               cred.lambda.sim(df.cred.lambda = df.cred.lambda.2[1:used.p,]),
+               cred.lambda.sim(df.cred.lambda = df.cred.lambda.3[1:used.p,]),
+               cred.lambda.sim(df.cred.lambda = df.cred.lambda.4[1:used.p,]),
+               
+               cor.sim.lambda.tau(df.correlation = df.correlation.lambda.tau.1[1:used.p,]),
+               cor.sim.lambda.tau(df.correlation = df.correlation.lambda.tau.2[1:used.p,]),
+               cor.sim.lambda.tau(df.correlation = df.correlation.lambda.tau.3[1:used.p,]),
+               cor.sim.lambda.tau(df.correlation = df.correlation.lambda.tau.4[1:used.p,]),
+               
+               cor.sim.lambda.xi(df.correlation = df.correlation.lambda.xi.1[1:used.p,]),
+               cor.sim.lambda.xi(df.correlation = df.correlation.lambda.xi.2[1:used.p,]),
+               cor.sim.lambda.xi(df.correlation = df.correlation.lambda.xi.3[1:used.p,]),
+               cor.sim.lambda.xi(df.correlation = df.correlation.lambda.xi.4[1:used.p,]),
+               
+               nrow = 4, ncol = 4)
+  
+}
+
+```
+
+
+The posterior means of global-scale parameter $\tau$ and the shape parameter $\xi$ (sparsity levels increase from the left to the right)
+```{r echo=FALSE}
+print(c(tau.1,tau.2,tau.3,tau.4))
+print(c(xi.1,xi.2,xi.3,xi.4))
+```
+
+The posterior distribution of the shape parameter $\xi$ (sparsity levels increase from the left to the right)
+```{r echo=FALSE}
+df_xi = data.frame(sparsity_level = rep(SL, each = length(thined.xi.1)), xi = c(thined.xi.1,thined.xi.2,thined.xi.3,thined.xi.4))
+g.res.xi.GLT = ggplot(df_xi) +
+  geom_density(aes(x=xi, y=..density.., color=factor(sparsity_level), fill = factor(sparsity_level)), alpha=0.3, position="identity")+
+  theme_bw()
+g.res.xi.GLT
+```
