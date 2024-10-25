@@ -1,2 +1,2 @@
-# Tail_adaptive_Bayesian_Shrinkage
+# Tail-adaptive Bayesian Shrinkage
 R codes to implement the Gibbs sampler for the GLT prior
